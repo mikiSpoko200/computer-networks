@@ -1,0 +1,9 @@
+vms/
+vol/
+*.tar
+.idea/
+.vscode/
+cmake-build-debug/
+mikolaj_depta/
+CMakeLists.txt/
+*.zip/
