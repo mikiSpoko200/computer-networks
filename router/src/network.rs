@@ -24,7 +24,7 @@ impl Network {
 
     pub fn with_prefix_masking(prefix: Ipv4Addr, subnet_mask: SubNetMask) -> Self {
         let address_bytes = u32::from(prefix);
-        let masked_prefix = Ipv4Addr::from(address_bytes & subnet_mask.value() as u32 - 1u32);
+        let masked_prefix = Ipv4Addr::from(address_bytes & !((1 << (32 - subnet_mask.value() as u32)) - 1u32));
         Self {
             prefix: masked_prefix,
             subnet_mask,

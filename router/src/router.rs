@@ -31,7 +31,7 @@ pub struct Nic {
 impl Nic {
     pub fn new(ip_address: Ipv4Addr) -> Self {
         let socket_address = SocketAddrV4::new(ip_address, RIP_PORT_NUMBER);
-        let mut socket = UdpSocket::bind(socket_address).unwrap();
+        let socket = UdpSocket::bind(socket_address).unwrap();
         // socket.set_nonblocking(true).unwrap();
         socket.set_broadcast(true).unwrap();
         Self { socket, ip_address }
