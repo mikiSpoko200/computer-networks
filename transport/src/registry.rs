@@ -1,10 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::Entry;
-use std::hash::Hasher;
 use crate::libc;
 use libc::epoll_event;
 
-use libc::{O_CLOEXEC};
+use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 
@@ -25,9 +22,13 @@ pub enum EventType {
     Write,
 }
 
-
-pub(self) mod epoll_event_args {
-    use super::*;
+impl EventType {
+    pub(self) const fn epoll_event(&self) -> epoll_event {
+        match &self {
+            EventType::Read =>  read_event(),
+            EventType::Write => write_event(),
+        }
+    }
 
     const fn read_event() -> epoll_event {
         epoll_event { events: Registry::READ_FLAGS as u32, u64: Registry::READ_KEY }
@@ -36,14 +37,6 @@ pub(self) mod epoll_event_args {
     const fn write_event() -> epoll_event {
         epoll_event { events: Registry::READ_FLAGS as u32, u64: Registry::READ_KEY }
     }
-
-    pub(super) const fn event_args(event_type: EventType) -> epoll_event {
-        match event_type {
-            EventType::Read =>  read_event(),
-            EventType::Write => write_event(),
-        }
-    }
-
 }
 
 
@@ -59,14 +52,14 @@ impl Registry {
     const WRITE_KEY: u64 = 1;
 
     pub fn new() -> io::Result<Self> {
-        let epoll_fd = syscall!(epoll_create1(O_CLOEXEC)).expect("cannot create an epoll");
+        let epoll_fd = syscall!(epoll_create1(libc::O_CLOEXEC)).expect("cannot create an epoll");
         Ok(Self { epoll_fd, instances: HashMap::new() })
     }
 
     /// Registers interest in `event_type` for `fd`.
     pub fn add_interest(&mut self, event_type: EventType, fd: impl AsRawFd) -> io::Result<()> {
         let fd = fd.as_raw_fd();
-        let new_interest_epoll_event = epoll_event_args::event_args(event_type);
+        let new_interest_epoll_event = event_type.epoll_event();
         self.instances.entry(fd)
             .and_modify(|interests| { interests.insert(event_type, new_interest_epoll_event); })
             .or_insert(HashMap::from([(event_type, new_interest_epoll_event)]));
