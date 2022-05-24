@@ -9,3 +9,7 @@ vol/
 **/*.zip
 **/target
 **/*.lock
+transport/transport-binaries/
+workshop*/
+lab*/
+tests/
