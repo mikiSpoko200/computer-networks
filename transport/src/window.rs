@@ -20,8 +20,10 @@ pub struct Window {
 impl Window {
     const SIZE: usize = 1000;
 
-    pub fn new(size: usize) -> Self {
-        let queue = VecDeque::with_capacity(size);
+    pub fn new(segment_byte_ranges: &mut impl Iterator<Item=ByteRange>) -> Self {
+        let mut queue = VecDeque::with_capacity(Self::SIZE);
+        queue.extend(segment_byte_ranges.map(Segment::from));
+        dbg!(&queue);
         let received_buffer = Vec::new();
         Self { queue, received_buffer, read_seg_count: 0 }
     }
@@ -36,14 +38,14 @@ impl Window {
         &self.received_buffer[..]
     }
 
-    pub fn extend(&mut self, segment_byte_ranges: &mut impl Iterator<Item=Range<usize>>) {
+    pub fn extend(&mut self, segment_byte_ranges: &mut impl Iterator<Item=ByteRange>) {
         self.queue.extend(self.received_buffer.drain(..)
             .zip(segment_byte_ranges)
             .map(|(segment, byte_range)| {
                 let data = segment.yield_buffer();
                 Segment::with_buffer(byte_range, data)
             })
-        )
+        );
     }
 
     /* TODO: test this */
@@ -53,7 +55,7 @@ impl Window {
     }
 
     pub fn unacknowledged_segments(&mut self) -> impl Iterator<Item=&mut Segment> {
-        self.queue.iter_mut().filter(|segment| segment.is_received())
+        self.queue.iter_mut().filter(|segment| !segment.is_received())
     }
 }
 
@@ -70,12 +72,6 @@ impl IndexMut<&ByteRange> for Window {
     fn index_mut(&mut self, seg_byte_range: &ByteRange) -> &mut Self::Output {
         let seg_index = seg_byte_range.start / Segment::SIZE;
         &mut self.queue[seg_index - self.read_seg_count]
-    }
-}
-
-impl Default for Window {
-    fn default() -> Self {
-        Self { queue: VecDeque::with_capacity(Self::SIZE), received_buffer: Vec::new(), read_seg_count: 0 }
     }
 }
 

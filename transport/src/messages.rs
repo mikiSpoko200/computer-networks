@@ -113,6 +113,6 @@ impl<'range> Request<'range> {
 
 impl Display for Request<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GET {} {}\n", self.byte_range.start, self.byte_range.len())
+        write!(f, "GET {} {}\n", self.byte_range.start, self.byte_range.end)
     }
 }

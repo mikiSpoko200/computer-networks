@@ -10,7 +10,6 @@ use std::io::Write as _;
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::os::unix::prelude::*;
-use std::str::FromStr;
 
 use crate::messages::{ByteRange, Request, Response};
 use crate::segment::Segment;
@@ -81,6 +80,7 @@ pub struct Downloader {
     registry: Registry,
     window: Window,
     server_address: SocketAddrV4,
+    segment_byte_ranges: SegmentByteRangeIter,
     file_size: usize,
     file_handle: File
 }
@@ -107,13 +107,17 @@ impl Downloader {
             .unwrap();
 
         registry.add_interest(EventType::Read, socket.as_raw_fd()).map_err(|err|
-            util::fail_with_message(format!("could not register interesed for "))
+            util::fail_with_message(format!("could not register interested for {}", err))
         ).unwrap();
+
+        let mut segment_byte_ranges = SegmentByteRangeIter::new(file_size, Segment::SIZE);
+        let window = Window::new(&mut segment_byte_ranges);
 
         Self {
             socket,
             registry,
-            window: Window::default(),
+            window,
+            segment_byte_ranges,
             server_address,
             file_size,
             file_handle,
@@ -130,21 +134,17 @@ impl Downloader {
         }
     }
 
-    fn byte_ranges(&self) -> SegmentByteRangeIter {
-        SegmentByteRangeIter::new(self.file_size, Segment::SIZE)
-    }
-
     fn send_window_with_buf(&mut self, request_buffer: &mut String) {
         for segment in self.window.unacknowledged_segments() {
             request_buffer.clear();
             write!(request_buffer, "{}", segment.request()).unwrap();
-            self.socket.send_to(segment.as_mut(), self.server_address).expect("cannot send to the server");
+            self.socket.send_to(request_buffer.as_ref(), self.server_address).expect("cannot send to the server");
         }
     }
 
     fn store_segments(&mut self, message_buffer: &mut [u8]) {
         loop {
-            match self.socket.recv_from(message_buffer) {
+            match dbg!(self.socket.recv_from(message_buffer)) {
                 Ok((message_size, SocketAddr::V4(sender))) if sender == self.server_address && Response::is_message_size_valid(message_size)  => {
                     let response = Response::new(message_buffer);
                     /* If segment is outside of window we ignore it. */
@@ -162,18 +162,18 @@ impl Downloader {
     }
 
     pub fn download(&mut self) {
-        let mut byte_ranges = self.byte_ranges();
         let mut request_buffer= String::with_capacity(Request::MAX_SIZE);
         let mut response_buffer = Vec::with_capacity(Response::MAX_SIZE).into_boxed_slice();
         let mut bytes_downloaded = 0;
 
-        while bytes_downloaded < self.file_size {
-            self.window.extend(&mut byte_ranges);
+        while dbg!(bytes_downloaded) < self.file_size {
+            self.window.extend(&mut self.segment_byte_ranges);
             self.socket.set_nonblocking(false).expect("cannot set socket to blocking mode");
             self.send_window_with_buf(&mut request_buffer);
             self.socket.set_nonblocking(true).expect("cannot set socket to nonblocking mode");
             match self.await_socket_read_ready() {
                 Notification::Timeout   => {
+                    println!("Timeout");
                     let segments = self.window.shrink();
                     for segment in segments {
                         self.file_handle.write_all(segment.as_ref()).map_err(|err| {
@@ -181,7 +181,10 @@ impl Downloader {
                         }).unwrap();
                         bytes_downloaded += segment.len();
                     }}
-                Notification::ReadReady => self.store_segments(&mut response_buffer),
+                Notification::ReadReady => {
+                    println!("ReadReady");
+                    self.store_segments(&mut response_buffer)
+                },
             };
         }
     }
@@ -205,7 +208,7 @@ impl DownloaderConfig {
     pub fn try_from<I>(mut iter: I) -> Self
     where I: Iterator<Item=String>
     {
-        let ip_address = iter.next()
+        let ip_address = iter.nth(1)
             .expect("server ipv4 address missing")
             .parse()
             .expect("invalid format of server ipv4 address");

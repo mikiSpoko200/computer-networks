@@ -67,6 +67,8 @@ impl Registry {
     const READ_KEY: u64 = 0;
     const WRITE_KEY: u64 = 1;
     const DEFAULT_TIMEOUT: Duration = Duration::from_millis(1500);
+    const MAX_LISTENER_COUNT: usize = 1;
+
 
     pub fn new() -> io::Result<Self> {
         Self::with_timeout(Self::DEFAULT_TIMEOUT)
@@ -74,9 +76,10 @@ impl Registry {
 
     pub fn with_timeout(timeout: Duration) -> io::Result<Self> {
         let epoll_fd = syscall!(epoll_create1(libc::O_CLOEXEC)).expect("cannot create an epoll");
-        Ok(Self { epoll_fd, events: Vec::new(), instances: HashMap::new(), timeout })
+        Ok(Self { epoll_fd, events: Vec::with_capacity(Self::MAX_LISTENER_COUNT), instances: HashMap::new(), timeout })
     }
 
+    /* warning: no checking if the number of registered file descriptors is within MAX_LISTENER_COUNT range. */
     /// Registers interest in `event_type` for `fd`.
     pub fn add_interest(&mut self, event_type: EventType, fd: impl AsRawFd) -> io::Result<()> {
         let fd = fd.as_raw_fd();
@@ -102,7 +105,7 @@ impl Registry {
             epoll_wait(
                 self.epoll_fd,
                 self.events.as_mut_ptr() as *mut epoll_event,
-                self.events.len() as i32,
+                Self::MAX_LISTENER_COUNT as libc::c_int,
                 self.timeout.as_millis() as libc::c_int,
             )
         ).map_err(|err| {
