@@ -1,5 +1,10 @@
+//! This module exposes epoll wrapper in a form of registry.
+
+#![allow(dead_code)]
+
 use crate::{libc, util};
 use libc::epoll_event;
+
 
 use std::collections::HashMap;
 use std::io;
