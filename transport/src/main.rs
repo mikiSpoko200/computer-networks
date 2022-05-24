@@ -8,10 +8,12 @@ mod window;
 mod downloader;
 
 use libc;
-
+use std::env;
 use downloader::Downloader;
+use crate::downloader::DownloaderConfig;
 
 fn main() {
-    // let address =
-    // let downloader = Downloader::new();
+    let config = DownloaderConfig::try_from(env::args());
+    let mut downloader = Downloader::from(config);
+    downloader.download()
 }

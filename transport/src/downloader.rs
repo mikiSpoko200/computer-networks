@@ -10,6 +10,7 @@ use std::io::Write as _;
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::os::unix::prelude::*;
+use std::str::FromStr;
 
 use crate::messages::{ByteRange, Request, Response};
 use crate::segment::Segment;
@@ -69,6 +70,11 @@ mod tests_segment_byte_range_iter {
     }
 }
 
+enum Notification {
+    Timeout,
+    ReadReady,
+}
+
 
 pub struct Downloader {
     socket: UdpSocket,
@@ -77,13 +83,6 @@ pub struct Downloader {
     server_address: SocketAddrV4,
     file_size: usize,
     file_handle: File
-}
-
-/* TODO: what's the host address? */
-
-enum Notification {
-    Timeout,
-    ReadReady,
 }
 
 
@@ -109,7 +108,7 @@ impl Downloader {
 
         registry.add_interest(EventType::Read, socket.as_raw_fd()).map_err(|err|
             util::fail_with_message(format!("could not register interesed for "))
-        );
+        ).unwrap();
 
         Self {
             socket,
@@ -135,13 +134,12 @@ impl Downloader {
         SegmentByteRangeIter::new(self.file_size, Segment::SIZE)
     }
 
-    fn send_window_with_buf(&mut self, request_buffer: &mut String) -> io::Result<()> {
+    fn send_window_with_buf(&mut self, request_buffer: &mut String) {
         for segment in self.window.unacknowledged_segments() {
             request_buffer.clear();
             write!(request_buffer, "{}", segment.request()).unwrap();
-            self.socket.send_to(segment.as_mut(), self.server_address)?;
+            self.socket.send_to(segment.as_mut(), self.server_address).expect("cannot send to the server");
         }
-        Ok(())
     }
 
     fn store_segments(&mut self, message_buffer: &mut [u8]) {
@@ -153,7 +151,7 @@ impl Downloader {
                     if self.window.contains(response.byte_range()) {
                         /* Otherwise we copy response's data into its buffer. */
                         let segment = &mut self.window[response.byte_range()];
-                        segment.write_all(message_buffer);
+                        segment.write_all(message_buffer).unwrap();
                     }
                 }
                 Ok(_) => continue,
@@ -163,7 +161,7 @@ impl Downloader {
         }
     }
 
-    pub fn download(&mut self) -> io::Result<()> {
+    pub fn download(&mut self) {
         let mut byte_ranges = self.byte_ranges();
         let mut request_buffer= String::with_capacity(Request::MAX_SIZE);
         let mut response_buffer = Vec::with_capacity(Response::MAX_SIZE).into_boxed_slice();
@@ -171,22 +169,28 @@ impl Downloader {
 
         while bytes_downloaded < self.file_size {
             self.window.extend(&mut byte_ranges);
-            self.socket.set_nonblocking(false)?;
-            self.send_window_with_buf(&mut request_buffer)?;
-            self.socket.set_nonblocking(true)?;
+            self.socket.set_nonblocking(false).expect("cannot set socket to blocking mode");
+            self.send_window_with_buf(&mut request_buffer);
+            self.socket.set_nonblocking(true).expect("cannot set socket to nonblocking mode");
             match self.await_socket_read_ready() {
                 Notification::Timeout   => {
                     let segments = self.window.shrink();
                     for segment in segments {
                         self.file_handle.write_all(segment.as_ref()).map_err(|err| {
                             util::fail_with_message(format!("could not append to file: {err}"));
-                        });
+                        }).unwrap();
                         bytes_downloaded += segment.len();
                     }}
                 Notification::ReadReady => self.store_segments(&mut response_buffer),
             };
         }
-        Ok(())
+    }
+}
+
+
+impl From<DownloaderConfig> for Downloader {
+    fn from(config: DownloaderConfig) -> Self {
+        Self::new(config.address, config.file_name.as_ref(), config.size)
     }
 }
 
@@ -195,4 +199,26 @@ pub struct DownloaderConfig {
     pub address: SocketAddrV4,
     pub file_name: String,
     pub size: usize,
+}
+
+impl DownloaderConfig {
+    pub fn try_from<I>(mut iter: I) -> Self
+    where I: Iterator<Item=String>
+    {
+        let ip_address = iter.next()
+            .expect("server ipv4 address missing")
+            .parse()
+            .expect("invalid format of server ipv4 address");
+        let port = iter.next()
+            .expect("server port missing")
+            .parse()
+            .expect("invalid format of server port");
+        let size = iter.next()
+            .expect("file length missing")
+            .parse()
+            .expect("invalid format of file legnth");
+        let file_name = iter.next()
+            .expect("file name missing");
+        Self { address: SocketAddrV4::new(ip_address, port), size, file_name }
+    }
 }
