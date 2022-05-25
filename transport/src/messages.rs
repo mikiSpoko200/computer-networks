@@ -3,7 +3,7 @@
 //! It exposes two message types: Response, and Request.
 
 use std::ops::{Range, RangeInclusive};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::str;
 
 
@@ -37,7 +37,7 @@ impl<'message> Response<'message> {
     pub const DATA_SIZE: usize = 500;
 
     pub const fn is_message_size_valid(size: usize) -> bool {
-        Self::MIN_SIZE <= size && size <= Self::MAX_SIZE
+        Self::MIN_HEADER_SIZE <= size && size <= Self::MAX_SIZE
     }
 
     pub const fn is_header_size_valid(size: usize) -> bool {
@@ -58,7 +58,6 @@ impl<'message> Response<'message> {
             .position(|&byte| byte == '\n' as u8)
             .expect(r#"invalid response format, no Line Feed '\n') found"#);
         let (header_bytes, other ) = message_bytes.split_at(newline_index);
-        let data = &other[1..];
         let header= str::from_utf8(header_bytes).expect("invalid response format, header is not valid utf");
         let mut words = header.split_whitespace();
         let start = words.nth(1)
@@ -70,11 +69,10 @@ impl<'message> Response<'message> {
             .parse::<usize>()
             .expect("invalid response header format, length is not a number");
 
-        if data.len() != Response::DATA_SIZE {
-            panic!("invalid response format, data section has invalid length. Expected: {}, got: {}", Response::DATA_SIZE, data.len());
-        }
+        let byte_range = start..(start + length);
+        let data = &other[1..length + 1];
 
-        Self { message_bytes, header, data, byte_range: start..(start+length) }
+        Self { message_bytes, header, data, byte_range }
     }
 
     pub fn byte_range(&self) -> &Range<usize> {
@@ -83,6 +81,15 @@ impl<'message> Response<'message> {
 
     pub fn data(&self) -> &[u8] {
         self.data
+    }
+}
+
+impl Debug for Response<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Response")
+            .field("byte range", &self.byte_range)
+            .field("data len", &self.data.len())
+            .finish()
     }
 }
 
@@ -113,6 +120,6 @@ impl<'range> Request<'range> {
 
 impl Display for Request<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GET {} {}\n", self.byte_range.start, self.byte_range.end)
+        write!(f, "GET {} {}\n", self.byte_range.start, self.byte_range.len())
     }
 }

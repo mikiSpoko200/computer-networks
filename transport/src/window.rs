@@ -23,7 +23,6 @@ impl Window {
     pub fn new(segment_byte_ranges: &mut impl Iterator<Item=ByteRange>) -> Self {
         let mut queue = VecDeque::with_capacity(Self::SIZE);
         queue.extend(segment_byte_ranges.map(Segment::from));
-        dbg!(&queue);
         let received_buffer = Vec::new();
         Self { queue, received_buffer, read_seg_count: 0 }
     }
@@ -33,9 +32,9 @@ impl Window {
     }
 
     pub fn shrink(&mut self) -> &[Segment] {
-        debug_assert!(self.received_buffer.is_empty());
         self.received_buffer.extend(self.queue.drain(0..self.slide_len()));
-        &self.received_buffer[..]
+        self.read_seg_count += self.received_buffer.len();
+        self.received_buffer.as_ref()
     }
 
     pub fn extend(&mut self, segment_byte_ranges: &mut impl Iterator<Item=ByteRange>) {
@@ -50,7 +49,7 @@ impl Window {
 
     /* TODO: test this */
     pub fn contains(&self, other: &Range<usize>) -> bool {
-        self.read_seg_count * Segment::SIZE < other.start &&
+        self.read_seg_count * Segment::SIZE <= other.start &&
             other.start <= (self.read_seg_count + self.queue.len()) * Segment::SIZE
     }
 

@@ -10,6 +10,7 @@ use std::io::Write as _;
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::os::unix::prelude::*;
+use std::time::Duration;
 
 use crate::messages::{ByteRange, Request, Response};
 use crate::segment::Segment;
@@ -71,7 +72,7 @@ mod tests_segment_byte_range_iter {
 
 enum Notification {
     Timeout,
-    ReadReady,
+    ReadReady(Duration),
 }
 
 
@@ -85,10 +86,10 @@ pub struct Downloader {
     file_handle: File
 }
 
-
 impl Downloader {
     const HOST_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
     const HOST_PORT: u16 = 54321;
+    const TIMEOUT: Duration = Duration::from_millis(1500);
 
     pub fn new(server_address: SocketAddrV4, file_name: &str, file_size: usize) -> Self {
         let socket = UdpSocket::bind(SocketAddrV4::new(Self::HOST_IP_ADDRESS, Self::HOST_PORT)).map_err(|err| {
@@ -127,10 +128,10 @@ impl Downloader {
     /* warning: as of current implementation there is only one item registered.
         This function works correctly if this assumption holds.
     */
-    fn await_socket_read_ready(&mut self) -> Notification {
-        match self.registry.await_events() {
+    fn await_socket_read_ready(&mut self, timeout: &Duration) -> Notification {
+        match self.registry.await_events(timeout) {
             registry::Notification::Timeout => Notification::Timeout,
-            registry::Notification::Events(_) => Notification::ReadReady,
+            registry::Notification::Events(_, sleep_time) => Notification::ReadReady(sleep_time),
         }
     }
 
@@ -144,14 +145,14 @@ impl Downloader {
 
     fn store_segments(&mut self, message_buffer: &mut [u8]) {
         loop {
-            match dbg!(self.socket.recv_from(message_buffer)) {
+            match self.socket.recv_from(message_buffer) {
                 Ok((message_size, SocketAddr::V4(sender))) if sender == self.server_address && Response::is_message_size_valid(message_size)  => {
                     let response = Response::new(message_buffer);
                     /* If segment is outside of window we ignore it. */
                     if self.window.contains(response.byte_range()) {
                         /* Otherwise we copy response's data into its buffer. */
                         let segment = &mut self.window[response.byte_range()];
-                        segment.write_all(message_buffer).unwrap();
+                        segment.write_all(response.data()).unwrap();
                     }
                 }
                 Ok(_) => continue,
@@ -162,18 +163,19 @@ impl Downloader {
     }
 
     pub fn download(&mut self) {
-        let mut request_buffer= String::with_capacity(Request::MAX_SIZE);
-        let mut response_buffer = Vec::with_capacity(Response::MAX_SIZE).into_boxed_slice();
+        let mut request_buffer = String::with_capacity(Request::MAX_SIZE);
+        let mut response_buffer = vec![0; Response::MAX_SIZE].into_boxed_slice();
         let mut bytes_downloaded = 0;
+        let mut timeout = Self::TIMEOUT;
 
-        while dbg!(bytes_downloaded) < self.file_size {
+        while bytes_downloaded < self.file_size {
             self.window.extend(&mut self.segment_byte_ranges);
             self.socket.set_nonblocking(false).expect("cannot set socket to blocking mode");
             self.send_window_with_buf(&mut request_buffer);
             self.socket.set_nonblocking(true).expect("cannot set socket to nonblocking mode");
-            match self.await_socket_read_ready() {
+            match self.await_socket_read_ready(&timeout) {
                 Notification::Timeout   => {
-                    println!("Timeout");
+                    timeout = Self::TIMEOUT;
                     let segments = self.window.shrink();
                     for segment in segments {
                         self.file_handle.write_all(segment.as_ref()).map_err(|err| {
@@ -181,15 +183,15 @@ impl Downloader {
                         }).unwrap();
                         bytes_downloaded += segment.len();
                     }}
-                Notification::ReadReady => {
-                    println!("ReadReady");
+                Notification::ReadReady(sleep_time) => {
+                    timeout = timeout.saturating_sub(sleep_time);
                     self.store_segments(&mut response_buffer)
                 },
             };
         }
+        debug_assert_eq!(bytes_downloaded, self.file_size);
     }
 }
-
 
 impl From<DownloaderConfig> for Downloader {
     fn from(config: DownloaderConfig) -> Self {
@@ -216,12 +218,12 @@ impl DownloaderConfig {
             .expect("server port missing")
             .parse()
             .expect("invalid format of server port");
+        let file_name = iter.next()
+            .expect("file name missing");
         let size = iter.next()
             .expect("file length missing")
             .parse()
             .expect("invalid format of file legnth");
-        let file_name = iter.next()
-            .expect("file name missing");
         Self { address: SocketAddrV4::new(ip_address, port), size, file_name }
     }
 }

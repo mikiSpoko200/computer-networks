@@ -9,7 +9,7 @@ use libc::epoll_event;
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 
 /* TODO: expose EventType instead of epoll_event (in registry' await_events())  */
@@ -50,7 +50,7 @@ impl EventType {
 
 pub enum Notification<'a> {
     Timeout,
-    Events(&'a [epoll_event]),
+    Events(&'a [epoll_event], Duration),
 }
 
 
@@ -99,26 +99,27 @@ impl Registry {
         Ok(())
     }
 
-    pub fn await_events(&mut self) -> Notification {
+    pub fn await_events(&mut self, timeout: &Duration) -> Notification {
         self.events.clear();
+        let sleep_start_time = Instant::now();
         let res = syscall!(
             epoll_wait(
                 self.epoll_fd,
                 self.events.as_mut_ptr() as *mut epoll_event,
                 Self::MAX_LISTENER_COUNT as libc::c_int,
-                self.timeout.as_millis() as libc::c_int,
+                timeout.as_millis() as libc::c_int,
             )
         ).map_err(|err| {
             util::fail_with_message(format!("error during epoll wait: {err}"));
         }).unwrap();
-
+        let sleep_duration = Instant::now() - sleep_start_time;
         // safety: since events was empty before epoll_wait syscall the length of self.events
         // after should be exactly res (assuming kernel is correct).
         unsafe { self.events.set_len(res as usize); }
         if self.events.len() == 0 {
             Notification::Timeout
         } else {
-            Notification::Events(&self.events[..])
+            Notification::Events(&self.events[..], sleep_duration)
         }
     }
 }
