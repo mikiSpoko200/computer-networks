@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use std::io::{Read, Write};
+use std::io::{Write};
 use crate::messages::{ByteRange, Request, Response};
 
 
