@@ -90,12 +90,10 @@ pub struct Downloader {
 }
 
 impl Downloader {
-    const HOST_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
-    const HOST_PORT: u16 = 54321;
     const TIMEOUT: Duration = Duration::from_millis(1000);
 
     pub fn new(server_address: SocketAddrV4, file_name: &str, file_size: usize) -> Self {
-        let socket = UdpSocket::bind(SocketAddrV4::new(Self::HOST_IP_ADDRESS, Self::HOST_PORT)).map_err(|err| {
+        let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).map_err(|err| {
             util::fail_with_message(format!("could not bind the socket: {err}").as_ref());
         }).unwrap();
 
@@ -109,7 +107,7 @@ impl Downloader {
             }).unwrap();
 
         registry.add_interest(EventType::Read, socket.as_raw_fd()).map_err(|err|
-            util::fail_with_message(format!("could not register interested for {}", err).as_ref())
+            util::fail_with_message(format!("could not register interest for {}", err).as_ref())
         ).unwrap();
 
         let mut segment_byte_ranges = SegmentByteRangeIter::new(file_size, Segment::SIZE);
