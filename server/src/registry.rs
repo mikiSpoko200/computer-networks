@@ -1,0 +1,164 @@
+//! Mikołaj Depta 328690
+//!
+//! This module exposes epoll wrapper in a form of registry.
+
+use crate::{libc, util};
+use libc::epoll_event;
+
+
+use std::collections::HashMap;
+use std::io;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::time::{Duration, Instant};
+use crate::util::{OrFailWithMessage};
+
+
+/* TODO: expose EventType instead of epoll_event (in registry' await_event())  */
+
+
+macro_rules! syscall {
+    ($func_name: ident ( $($arg: expr),* $(,)* ) ) => {
+        {
+            let result = unsafe { libc::$func_name($($arg,)* ) };
+            if result == -1 { Err(std::io::Error::last_os_error()) } else { Ok(result) }
+        }
+    }
+}
+
+
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+pub enum EventType {
+    Read,
+    Write,
+}
+
+impl EventType {
+    pub(self) const fn epoll_event(&self) -> epoll_event {
+        match &self {
+            EventType::Read =>  Self::read_event(),
+            EventType::Write => Self::write_event(),
+        }
+    }
+
+    const fn read_event() -> epoll_event {
+        epoll_event { events: Registry::READ_FLAGS as u32, u64: Registry::READ_KEY }
+    }
+
+    const fn write_event() -> epoll_event {
+        epoll_event { events: Registry::READ_FLAGS as u32, u64: Registry::READ_KEY }
+    }
+}
+
+impl From<EventType> for epoll_event {
+    fn from(event: EventType) -> Self {
+        match event {
+            EventType::Read => {}
+            EventType::Write => {}
+        }
+    }
+}
+
+// note: this is very incorrect
+impl From<epoll_event> for EventType {
+    fn from(event: epoll_event) -> Self {
+        if event.events & libc::EPOLLIN as u32 != 0 {
+            Self::Read
+        } else {
+            Self::Write
+        }
+    }
+}
+
+pub enum Notification {
+    Timeout,
+    Event(EventType, Duration),
+}
+
+pub struct Registry {
+    epoll_fd: RawFd,
+    events: Vec<epoll_event>,
+    instances: HashMap<RawFd, HashMap<EventType, epoll_event>>,
+    timeout: Duration,
+}
+
+#[derive(Clone)]
+pub enum TimeoutDuration {
+    Infinite,
+    Finite(Duration)
+}
+
+impl Registry {
+    const READ_EVENT_FLAG: libc::c_int = libc::EPOLLIN;
+    const WRITE_EVENT_FLAGS: libc::c_int = libc::EPOLLOUT;
+    const READ_KEY: u64 = 0;
+    const WRITE_KEY: u64 = 1;
+    const DEFAULT_TIMEOUT: TimeoutDuration = TimeoutDuration::Finite(Duration::from_millis(1500));
+    const MAX_ENTRY_COUNT: usize = 1;
+
+
+    pub fn new() -> io::Result<Self> {
+        Self::with_timeout(Self::DEFAULT_TIMEOUT)
+    }
+
+    pub fn with_timeout(timeout: TimeoutDuration) -> io::Result<Self> {
+        let epoll_fd = syscall!(epoll_create1(libc::O_CLOEXEC)).or_fail_with_message("cannot create an epoll");
+        Ok(Self { epoll_fd, events: Vec::with_capacity(Self::MAX_LISTENER_COUNT), instances: HashMap::new(), timeout })
+    }
+
+    /* warning: no checking if the number of registered file descriptors is within MAX_LISTENER_COUNT range. */
+    /// Registers interest in `event_type` for `fd`.
+    pub fn add_interest(&mut self, event_type: EventType, fd: impl AsRawFd) -> io::Result<()> {
+        let fd = fd.as_raw_fd();
+        let new_interest_epoll_event = event_type.epoll_event();
+        self.instances.entry(fd)
+            .and_modify(|interests| { interests.insert(event_type, new_interest_epoll_event); })
+            .or_insert(HashMap::from([(event_type, new_interest_epoll_event)]));
+        let event_args = self.instances.get_mut(&fd).unwrap().get_mut(&event_type).unwrap();
+        syscall!(epoll_ctl(self.epoll_fd, libc::EPOLL_CTL_ADD, fd, event_args))?;
+        Ok(())
+    }
+
+    pub fn delete_interest(&mut self, event_type: EventType, fd: impl AsRawFd) -> io::Result<()> {
+        let fd = fd.as_raw_fd();
+        syscall!(epoll_ctl(self.epoll_fd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut()))?;
+        self.instances.entry(fd).and_modify(|interests| { interests.remove(&event_type); });
+        Ok(())
+    }
+
+    pub fn await_indefinitely(&mut self) -> EventType {
+        match self.await_event(&AwaitDuration::Infinite) {
+            Notification::Timeout => panic!("timeout shouldn't have happendend, invalid configuration"),
+            Notification::Event(event, _) => event,
+        }
+    }
+
+    pub fn await_event(&mut self, timeout: &AwaitDuration) -> Notification {
+        self.events.clear();
+        let sleep_start_time = Instant::now();
+
+        let epoll_timeout = match timeout {
+            AwaitDuration::Infinite => { -1 as libc::c_int }
+            AwaitDuration::Finite(duration) => { duration.as_millis() as libc::c_int }
+        };
+
+        let res = syscall!(
+            epoll_wait(
+                self.epoll_fd,
+                self.events.as_mut_ptr() as *mut epoll_event,
+                Self::MAX_LISTENER_COUNT as libc::c_int,
+                epoll_timeout,
+            )
+        ).map_err(|err| {
+            util::fail_with_message(format!("error during epoll wait: {err}").as_ref());
+        }).unwrap();
+        let sleep_duration = Instant::now() - sleep_start_time;
+        // safety: since events was empty before epoll_wait syscall the length of self.events
+        // after should be exactly res (assuming kernel is correct).
+        unsafe { self.events.set_len(res as usize); }
+        if res == 0 && self.events.len() == 0{
+            Notification::Timeout
+        } else {
+            Notification::Event(EventType::from(self.events[0]), sleep_duration)
+        }
+    }
+}
