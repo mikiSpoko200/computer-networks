@@ -1,11 +1,10 @@
 1. Ustaw obraz przez File > Virtual Media Meneger na Normal
 1.1. ustaw shared clipboard na Bidirectional 
 2. Odpal maszynę
-3. Ładuj sudo -i
-4. ustaw dhclient
+4. sudo dhclient
 4.1. wyjdź z sudo bo to zainstaluje wszystko tylko dla root'a (cringe)
-5. apt install curl
-6. apt install git
+5. sudo apt install curl
+6. sudo apt install git
 7. curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 7.1 UPEWNIJ SIĘ, ŻE CARGO SIĘ DOBRZE ZAINSTALOWAŁO PRZEZ TO source $HOME/.cargo/env
 8. wyłącz maszynę

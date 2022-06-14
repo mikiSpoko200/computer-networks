@@ -1,3 +1,5 @@
+//! Mikołaj Depta 328690
+//!
 //! This module exposes the downloader struct which allows for asynchronous
 //! communication with the server and download of files.
 
@@ -17,10 +19,11 @@ use crate::segment::Segment;
 use crate::registry::{EventType, Registry};
 use crate::window::Window;
 use crate::{registry, util};
+use crate::util::FailWithMessage;
 
 
 #[derive(Debug)]
-struct SegmentByteRangeIter {
+pub(crate) struct SegmentByteRangeIter {
     base_byte_offset: usize,
     file_size: usize,
     seg_size: usize,
@@ -89,26 +92,24 @@ pub struct Downloader {
 impl Downloader {
     const HOST_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
     const HOST_PORT: u16 = 54321;
-    const TIMEOUT: Duration = Duration::from_millis(1500);
+    const TIMEOUT: Duration = Duration::from_millis(1000);
 
     pub fn new(server_address: SocketAddrV4, file_name: &str, file_size: usize) -> Self {
         let socket = UdpSocket::bind(SocketAddrV4::new(Self::HOST_IP_ADDRESS, Self::HOST_PORT)).map_err(|err| {
-            util::fail_with_message(format!("could bind socket: {err}"));
+            util::fail_with_message(format!("could not bind the socket: {err}").as_ref());
         }).unwrap();
 
-        let mut registry = Registry::new().map_err(|err| {
-            util::fail_with_message(format!("could not create registry: {err}"));
-        }).unwrap();
+        let mut registry = Registry::new().or_fail_with_message("could not create registry");
 
         let file_handle = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(file_name)
-            .map_err(|err| util::fail_with_message(format!("error occurred while opening the file: {err}")))
-            .unwrap();
+            .write(true)
+            .create_new(true)
+            .open(file_name).map_err(|err|{
+                util::fail_with_message(format!("error occurred while opening the file {err}").as_str());
+            }).unwrap();
 
         registry.add_interest(EventType::Read, socket.as_raw_fd()).map_err(|err|
-            util::fail_with_message(format!("could not register interested for {}", err))
+            util::fail_with_message(format!("could not register interested for {}", err).as_ref())
         ).unwrap();
 
         let mut segment_byte_ranges = SegmentByteRangeIter::new(file_size, Segment::SIZE);
@@ -139,7 +140,8 @@ impl Downloader {
         for segment in self.window.unacknowledged_segments() {
             request_buffer.clear();
             write!(request_buffer, "{}", segment.request()).unwrap();
-            self.socket.send_to(request_buffer.as_ref(), self.server_address).expect("cannot send to the server");
+            self.socket.send_to(request_buffer.as_ref(), self.server_address)
+                .or_fail_with_message("cannot send to the server");
         }
     }
 
@@ -150,14 +152,17 @@ impl Downloader {
                     let response = Response::new(message_buffer);
                     /* If segment is outside of window we ignore it. */
                     if self.window.contains(response.byte_range()) {
-                        /* Otherwise we copy response's data into its buffer. */
+                        /* If the segment is a duplicate we ignore it. */
                         let segment = &mut self.window[response.byte_range()];
-                        segment.write_all(response.data()).unwrap();
+                        if !segment.is_received() {
+                            debug_assert_eq!(response.data().len(), response.byte_range().len());
+                            segment.write_all(response.data()).unwrap();
+                        }
                     }
                 }
                 Ok(_) => continue,
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                Err(err) => util::fail_with_message(format!("error occurred while reading from the socket. {}", err))
+                Err(err) => util::fail_with_message(format!("error occurred while reading from the socket. {}", err).as_ref())
             };
         }
     }
@@ -169,17 +174,16 @@ impl Downloader {
         let mut timeout = Self::TIMEOUT;
 
         while bytes_downloaded < self.file_size {
-            self.window.extend(&mut self.segment_byte_ranges);
-            self.socket.set_nonblocking(false).expect("cannot set socket to blocking mode");
+            self.socket.set_nonblocking(false).or_fail_with_message("cannot set socket to blocking mode");
             self.send_window_with_buf(&mut request_buffer);
-            self.socket.set_nonblocking(true).expect("cannot set socket to nonblocking mode");
+            self.socket.set_nonblocking(true).or_fail_with_message("cannot set socket to nonblocking mode");
             match self.await_socket_read_ready(&timeout) {
                 Notification::Timeout   => {
                     timeout = Self::TIMEOUT;
                     let segments = self.window.shrink();
                     for segment in segments {
                         self.file_handle.write_all(segment.as_ref()).map_err(|err| {
-                            util::fail_with_message(format!("could not append to file: {err}"));
+                            util::fail_with_message(format!("could not append to file: {err}").as_ref());
                         }).unwrap();
                         bytes_downloaded += segment.len();
                     }}
@@ -188,6 +192,7 @@ impl Downloader {
                     self.store_segments(&mut response_buffer)
                 },
             };
+            self.window.extend(&mut self.segment_byte_ranges);
         }
         debug_assert_eq!(bytes_downloaded, self.file_size);
     }
@@ -211,19 +216,19 @@ impl DownloaderConfig {
     where I: Iterator<Item=String>
     {
         let ip_address = iter.nth(1)
-            .expect("server ipv4 address missing")
+            .or_fail_with_message("server ipv4 address missing")
             .parse()
-            .expect("invalid format of server ipv4 address");
+            .or_fail_with_message("invalid format of server ipv4 address");
         let port = iter.next()
-            .expect("server port missing")
+            .or_fail_with_message("server port missing")
             .parse()
-            .expect("invalid format of server port");
+            .or_fail_with_message("invalid format of server port");
         let file_name = iter.next()
-            .expect("file name missing");
+            .or_fail_with_message("file name missing");
         let size = iter.next()
-            .expect("file length missing")
+            .or_fail_with_message("file length missing")
             .parse()
-            .expect("invalid format of file legnth");
+            .or_fail_with_message("invalid format of file length");
         Self { address: SocketAddrV4::new(ip_address, port), size, file_name }
     }
 }

@@ -1,10 +1,12 @@
-//! This module defines out custom download communication protocol.
+//! Mikołaj Depta 328690
 //!
+//! This module defines out custom download communication protocol.
 //! It exposes two message types: Response, and Request.
 
 use std::ops::{Range, RangeInclusive};
 use std::fmt::{Debug, Display, Formatter};
 use std::str;
+use crate::util::FailWithMessage;
 
 
 pub type ByteRange = Range<usize>;
@@ -56,20 +58,21 @@ impl<'message> Response<'message> {
         let newline_index = message_bytes
             .iter()
             .position(|&byte| byte == '\n' as u8)
-            .expect(r#"invalid response format, no Line Feed '\n') found"#);
+            .or_fail_with_message(r#"invalid response format, no Line Feed '\n') found"#);
         let (header_bytes, other ) = message_bytes.split_at(newline_index);
-        let header= str::from_utf8(header_bytes).expect("invalid response format, header is not valid utf");
+        let header= str::from_utf8(header_bytes).or_fail_with_message("invalid response format, header is not valid utf");
         let mut words = header.split_whitespace();
         let start = words.nth(1)
-            .expect("invalid response header format, start missing")
+            .or_fail_with_message("invalid response header format, start missing")
             .parse()
-            .expect("invalid response header format, start is not a number");
+            .or_fail_with_message("invalid response header format, start is not a number");
         let length = words.next()
-            .expect("invalid response header format, length missing")
+            .or_fail_with_message("invalid response header format, length missing")
             .parse::<usize>()
-            .expect("invalid response header format, length is not a number");
+            .or_fail_with_message("invalid response header format, length is not a number");
 
         let byte_range = start..(start + length);
+        assert!(length <= 500);
         let data = &other[1..length + 1];
 
         Self { message_bytes, header, data, byte_range }

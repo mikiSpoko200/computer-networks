@@ -1,3 +1,5 @@
+//! Mikołaj Depta 328690
+//!
 //! This module exposes epoll wrapper in a form of registry.
 
 #![allow(dead_code)]
@@ -10,6 +12,7 @@ use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::{Duration, Instant};
+use crate::util::FailWithMessage;
 
 
 /* TODO: expose EventType instead of epoll_event (in registry' await_events())  */
@@ -75,7 +78,7 @@ impl Registry {
     }
 
     pub fn with_timeout(timeout: Duration) -> io::Result<Self> {
-        let epoll_fd = syscall!(epoll_create1(libc::O_CLOEXEC)).expect("cannot create an epoll");
+        let epoll_fd = syscall!(epoll_create1(libc::O_CLOEXEC)).or_fail_with_message("cannot create an epoll");
         Ok(Self { epoll_fd, events: Vec::with_capacity(Self::MAX_LISTENER_COUNT), instances: HashMap::new(), timeout })
     }
 
@@ -110,7 +113,7 @@ impl Registry {
                 timeout.as_millis() as libc::c_int,
             )
         ).map_err(|err| {
-            util::fail_with_message(format!("error during epoll wait: {err}"));
+            util::fail_with_message(format!("error during epoll wait: {err}").as_ref());
         }).unwrap();
         let sleep_duration = Instant::now() - sleep_start_time;
         // safety: since events was empty before epoll_wait syscall the length of self.events

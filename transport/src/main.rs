@@ -1,3 +1,4 @@
+//! Mikołaj Depta 328690
 #![allow(dead_code)]
 
 mod registry;

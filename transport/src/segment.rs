@@ -1,3 +1,5 @@
+//! Mikołaj Depta 328690
+//!
 //! This module contains segments in which files are downloaded.
 
 #![allow(dead_code)]
@@ -39,7 +41,6 @@ impl Segment {
     }
 
     pub fn set_data(&mut self, data: &[u8]) {
-        println!("received segment {:?}", self.byte_range);
         self.data.clear();
         self.status = Status::Received;
         self.data.extend(data.iter().take(Self::SIZE));
@@ -53,7 +54,8 @@ impl Segment {
         self.data.len()
     }
 
-    pub fn yield_buffer(self) -> Vec<u8> {
+    pub fn yield_buffer(mut self) -> Vec<u8> {
+        self.data.clear();
         self.data
     }
 
@@ -69,7 +71,7 @@ impl Segment {
 impl Write for Segment {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.set_data(buf);
-        Ok(buf.len())
+        Ok(self.data.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
